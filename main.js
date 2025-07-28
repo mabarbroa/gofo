@@ -2,11 +2,8 @@ const fs = require('fs');
 const axios = require('axios');
 const nacl = require('tweetnacl');
 const Base58 = require('base-58');
-const dotenv = require('dotenv');
 const readline = require('readline');
 const { HttpsProxyAgent } = require('https-proxy-agent');
-
-dotenv.config();
 
 const USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -57,26 +54,14 @@ const COUNTDOWN_HOURS = 24;
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * 
- * @param {string} query 
- * @returns {Promise<string>} 
- */
 function askQuestion(query) {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-    });
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     return new Promise(resolve => rl.question(query, ans => {
         rl.close();
         resolve(ans);
     }));
 }
 
-/**
- * 
- * @returns {string[]} 
- */
 function loadProxies() {
     try {
         const data = fs.readFileSync('proxies.txt', 'utf8');
@@ -93,14 +78,6 @@ function loadProxies() {
     }
 }
 
-/**
- * 
- * @param {object} wallet 
- * @param {number} amountIn 
- * @param {string} direction 
- * @param {HttpsProxyAgent} proxyAgent 
- * @returns {Promise<number>} 
- */
 async function performSwap(wallet, amountIn, direction, proxyAgent) {
     const isFogoToFusd = direction === 'FOGO_TO_FUSD';
     const fromToken = isFogoToFusd ? 'FOGO' : 'fUSD';
@@ -176,12 +153,6 @@ async function performSwap(wallet, amountIn, direction, proxyAgent) {
     }
 }
 
-/**
- * 
- * @param {string} txHash T
- * @param {axios.AxiosInstance} api T
- * @returns {Promise<boolean>} 
- */
 async function confirmTransaction(txHash, api, timeout = 90000) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeout) {
@@ -216,14 +187,10 @@ async function confirmTransaction(txHash, api, timeout = 90000) {
     return false;
 }
 
-/**
- * 
- * @param {number} hours 
- */
 async function startCountdown(hours) {
     let totalSeconds = hours * 3600;
     logger.info(`All cycles complete. Starting a ${hours}-hour countdown until the next run...`);
-    
+
     const timer = setInterval(() => {
         totalSeconds--;
         const h = Math.floor(totalSeconds / 3600);
@@ -243,12 +210,20 @@ async function startCountdown(hours) {
 async function main() {
     logger.banner();
 
-    const privateKeys = Object.keys(process.env)
-        .filter(key => key.startsWith('PRIVATE_KEY_'))
-        .map(key => process.env[key]);
+    let privateKeys = [];
+    try {
+        const fileData = fs.readFileSync('account.txt', 'utf8');
+        privateKeys = fileData
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0 && !line.startsWith('#'));
+    } catch (e) {
+        logger.error("Gagal membaca account.txt. Pastikan file tersedia dan dapat dibaca.");
+        return;
+    }
 
     if (privateKeys.length === 0) {
-        logger.error("No PRIVATE_KEY_ found in the .env file.");
+        logger.error("Tidak ada private key yang ditemukan di account.txt.");
         return;
     }
 
@@ -257,14 +232,14 @@ async function main() {
             const keyPair = nacl.sign.keyPair.fromSecretKey(Base58.decode(pk));
             return { keyPair, publicKey: Base58.encode(keyPair.publicKey) };
         } catch (e) {
-            logger.error(`Failed to process private key: ${pk.substring(0, 5)}... Please check format.`);
+            logger.error(`Failed to process private key: ${pk.substring(0, 5)}...`);
             return null;
         }
     }).filter(w => w);
 
     logger.success(`${wallets.length} wallet(s) loaded successfully.`);
     const proxies = loadProxies();
-    
+
     const cyclesStr = await askQuestion(`${colors.cyan}➤ Enter the number of daily transaction cycles to perform: ${colors.reset}`);
     const numCycles = parseInt(cyclesStr);
 
@@ -274,7 +249,7 @@ async function main() {
     }
 
     let proxyIndex = 0;
-    while (true) { 
+    while (true) {
         for (const wallet of wallets) {
             const proxy = proxies.length > 0 ? proxies[proxyIndex % proxies.length] : null;
             const proxyAgent = proxy ? new HttpsProxyAgent(proxy) : null;
@@ -287,19 +262,19 @@ async function main() {
                 const randomAmountFogo = MIN_SWAP_AMOUNT + Math.random() * (MAX_SWAP_AMOUNT - MIN_SWAP_AMOUNT);
                 const amountLamports = Math.floor(randomAmountFogo * 1e9);
                 logger.info(`Generated random amount: ${randomAmountFogo.toFixed(6)} FOGO (${amountLamports} lamports)`);
-                
+
                 const fusdReceived = await performSwap(wallet, amountLamports, 'FOGO_TO_FUSD', proxyAgent);
-                
+
                 if (fusdReceived > 0) {
                     logger.info("Waiting 15 seconds before swapping back...");
                     await delay(15000);
-
                     await performSwap(wallet, fusdReceived, 'FUSD_TO_FOGO', proxyAgent);
                 } else {
                     logger.error("Skipping swap back due to failure in the first swap.");
                 }
+
                 logger.info(`--- Cycle ${i + 1}/${numCycles} for wallet ${wallet.publicKey} finished. ---\n`);
-                await delay(10000); 
+                await delay(10000);
             }
         }
         await startCountdown(COUNTDOWN_HOURS);
